@@ -31,7 +31,7 @@ jobs:
 
       - name: Discord Notification
         if: always()
-        uses: tsickert/discord-webhook@v7.0.0
+        uses: tsickert/discord-webhook@b217a69502f52803de774ded2b1ab7c282e99645 # v7.0.0
         with:
           webhook-url: ${{ secrets.DISCORD_WEBHOOK }}
           username: TikTok Streak
