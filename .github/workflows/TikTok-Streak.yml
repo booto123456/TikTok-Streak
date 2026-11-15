@@ -23,6 +23,7 @@ jobs:
         env:
           COOKIES_JSON: ${{ secrets.COOKIES_JSON }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          HEADLESS: "true"
         run: node index.js
 
       - name: Discord Notification
