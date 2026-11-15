@@ -50,6 +50,24 @@ const fetchQuote = async () => {
   }
 };
 
+const sendDiscordAlert = async (url, missing) => {
+  const content =
+    "⚠️ **TikTok Streak Alert**\n" +
+    "ไม่พบชื่อเหล่านี้ในแชทวันนี้:\n" +
+    missing.map((m) => `- ${m}`).join("\n");
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content }),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    console.log(green("[+] ส่งแจ้งเตือนไปยัง Discord แล้ว"));
+  } catch (e) {
+    console.log(red(`[!] ส่ง Discord webhook ไม่สำเร็จ: ${e.message}`));
+  }
+};
+
 
 
 const main = async () => {
@@ -106,6 +124,7 @@ const main = async () => {
     const whitelist = (CONFIG.whitelist || [])
       .map((s) => String(s).trim().toLowerCase())
       .filter(Boolean);
+    const matchedWhitelist = new Set();
     const skipGroups = !!CONFIG.skipGroups;
     const groupMarkers = CONFIG.groupNameMarkers || [","];
     const iframe = await page.$("iframe[src*='/messages?allow_label=true&lang=en&scene=business']");
@@ -140,10 +159,14 @@ const main = async () => {
         const lower = username.toLowerCase();
 
         // --- เงื่อนไข whitelist: ถ้ามีรายชื่อ จะส่งเฉพาะคนที่ชื่อตรง ---
-        if (whitelist.length > 0 && !whitelist.some((w) => lower.includes(w))) {
-          if (isDebug) console.log(yellow(`  [${i + 1}/${CONFIG.totalUsers}] SKIP (ไม่อยู่ใน whitelist): ${displayName}`));
-          skipped++;
-          continue;
+        if (whitelist.length > 0) {
+          const matched = whitelist.find((w) => lower.includes(w));
+          if (!matched) {
+            if (isDebug) console.log(yellow(`  [${i + 1}/${CONFIG.totalUsers}] SKIP (ไม่อยู่ใน whitelist): ${displayName}`));
+            skipped++;
+            continue;
+          }
+          matchedWhitelist.add(matched);
         }
 
         // --- เงื่อนไขข้ามกลุ่ม: ชื่อมีตัวคั่นแบบชื่อสมาชิกหลายคน ---
@@ -196,7 +219,25 @@ const main = async () => {
     console.log(green(`\n[+] SELESAI!`));
     console.log(blue(`[+] Success: ${success}`));
     console.log(red(`[+] Failed: ${failed}`));
-    console.log(yellow(`[+] Skipped: ${skipped}\n`));
+    console.log(yellow(`[+] Skipped: ${skipped}`));
+
+    // --- แจ้งเตือนถ้ามีชื่อใน whitelist ที่ไม่ถูกพบ ---
+    if (whitelist.length > 0) {
+      const missing = whitelist.filter((w) => !matchedWhitelist.has(w));
+      if (missing.length > 0) {
+        const warn = `ไม่พบชื่อใน whitelist: ${missing.join(", ")}`;
+        console.log(red(`\n[!] ${warn}`));
+        const webhookUrl = process.env.DISCORD_WEBHOOK;
+        if (webhookUrl) {
+          await sendDiscordAlert(webhookUrl, missing);
+        } else {
+          console.log(red(`[!] (ไม่ได้ตั้ง DISCORD_WEBHOOK จึงไม่มีการแจ้งเตือน)`));
+        }
+      } else {
+        console.log(green(`[+] พบชื่อใน whitelist ครบทุกคน`));
+      }
+    }
+    console.log("");
     await new Promise((r) => setTimeout(r, CONFIG.finishDelayMs));
   } catch (e) {
     if (isDebug) console.error(red("[!] Fatal error:", e.message));
