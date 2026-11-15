@@ -1,6 +1,7 @@
 const puppeteer = require("puppeteer");
 const fs = require("fs");
 const path = require("path");
+const crypto = require("crypto");
 const figlet = require("figlet");
 const moment = require("moment-timezone");
 moment.tz.setDefault("Asia/Jakarta");
@@ -10,6 +11,8 @@ const { bold, red, yellow, blue, magenta, cyan, green } = require("kleur/colors"
 
 const args = process.argv.slice(2);
 const isDebug = args.includes("--debug");
+// log ของ public repo มองเห็นได้ทุกคน — HIDE_NAMES=1 จะพิมพ์แค่ลำดับ ไม่พิมพ์ชื่อเพื่อน
+const HIDE_NAMES = /^(1|true|yes)$/i.test(String(process.env.HIDE_NAMES || ""));
 const CREDENTIALS_FILE = path.join(__dirname, "cookies.json");
 const CONFIG_FILE = path.join(__dirname, "config.json");
 const loadConfig = () => {
@@ -40,6 +43,10 @@ const BROWSER_CONFIG = {
 if (process.env.PUPPETEER_EXECUTABLE_PATH) {
   BROWSER_CONFIG.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
 }
+// ---------- whitelist ----------
+// เก็บแบบเข้ารหัส (whitelist.enc) — ชื่อเพื่อนไม่ถูกเก็บเป็นข้อความใน public repo
+const whitelistStore = require("./whitelist");
+
 const fetchQuote = async () => {
   try {
     const res = await fetch("https://dummyjson.com/quotes/random");
@@ -121,16 +128,8 @@ const main = async () => {
     let success = 0,
     failed = 0,
     skipped = 0;
-    const WHITELIST_FILE = path.join(__dirname, "whitelist.json");
-    let whitelistRaw = CONFIG.whitelist || [];
-    if (fs.existsSync(WHITELIST_FILE)) {
-      try {
-        whitelistRaw = JSON.parse(fs.readFileSync(WHITELIST_FILE, "utf8"));
-        if (isDebug) console.log(green("[+] โหลด whitelist จาก whitelist.json"));
-      } catch {
-        console.log(red("[!] whitelist.json อ่านไม่ได้ ใช้ค่าใน config.json แทน"));
-      }
-    }
+    // ถ้าถอดรหัสไม่ได้ (กุญแจผิด/ไฟล์เสีย) จะ throw แล้วหยุดทันที ไม่ยอมส่งหาทุกคน
+    const whitelistRaw = whitelistStore.load({ debug: isDebug });
     const whitelist = (whitelistRaw || [])
       .map((s) => String(s).trim().toLowerCase())
       .filter(Boolean);
@@ -166,13 +165,14 @@ const main = async () => {
           return document.querySelector(sel)?.textContent?.trim() || "";
         }, nicknameSelector);
         const displayName = username || `user${i}`;
+        const label = HIDE_NAMES ? `user #${i + 1}` : displayName;
         const lower = username.toLowerCase();
 
         // --- เงื่อนไข whitelist: ถ้ามีรายชื่อ จะส่งเฉพาะคนที่ชื่อตรง ---
         if (whitelist.length > 0) {
           const matched = whitelist.find((w) => lower.includes(w));
           if (!matched) {
-            if (isDebug) console.log(yellow(`  [${i + 1}/${CONFIG.totalUsers}] SKIP (ไม่อยู่ใน whitelist): ${displayName}`));
+            if (isDebug) console.log(yellow(`  [${i + 1}/${CONFIG.totalUsers}] SKIP (ไม่อยู่ใน whitelist): ${label}`));
             skipped++;
             continue;
           }
@@ -181,13 +181,13 @@ const main = async () => {
 
         // --- เงื่อนไขข้ามกลุ่ม: ชื่อมีตัวคั่นแบบชื่อสมาชิกหลายคน ---
         if (skipGroups && groupMarkers.some((m) => username.includes(m))) {
-          if (isDebug) console.log(yellow(`  [${i + 1}/${CONFIG.totalUsers}] SKIP (เป็นกลุ่ม): ${displayName}`));
+          if (isDebug) console.log(yellow(`  [${i + 1}/${CONFIG.totalUsers}] SKIP (เป็นกลุ่ม): ${label}`));
           skipped++;
           continue;
         }
 
         await frame.click(userSelector);
-        console.log(yellow(`\n[${i + 1}/${CONFIG.totalUsers}] Mengirim pesan ke: ${displayName}`));
+        console.log(yellow(`\n[${i + 1}/${CONFIG.totalUsers}] Mengirim pesan ke: ${label}`));
         await new Promise((r) => setTimeout(r, 500));
         if (isDebug) console.log(yellow("  [~] Mencari editor..."));
         await frame.waitForSelector("div.notranslate.public-DraftEditor-content", { timeout: 3000 });
@@ -235,7 +235,9 @@ const main = async () => {
     if (whitelist.length > 0) {
       const missing = whitelist.filter((w) => !matchedWhitelist.has(w));
       if (missing.length > 0) {
-        const warn = `ไม่พบชื่อใน whitelist: ${missing.join(", ")}`;
+        const warn = HIDE_NAMES
+          ? `ไม่พบชื่อใน whitelist ${missing.length} รายการ (ซ่อนรายชื่อเพราะเปิด HIDE_NAMES)`
+          : `ไม่พบชื่อใน whitelist: ${missing.join(", ")}`;
         console.log(red(`\n[!] ${warn}`));
         const webhookUrl = process.env.DISCORD_WEBHOOK;
         if (webhookUrl) {

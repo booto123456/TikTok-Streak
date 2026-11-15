@@ -23,7 +23,10 @@ jobs:
         env:
           COOKIES_JSON: ${{ secrets.COOKIES_JSON }}
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          WHITELIST_KEY: ${{ secrets.WHITELIST_KEY }}
           HEADLESS: "true"
+          # public repo: log เปิดให้ทุกคนอ่าน — ห้ามพิมพ์ชื่อเพื่อนลง log
+          HIDE_NAMES: "1"
         run: node index.js
 
       - name: Discord Notification

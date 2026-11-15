@@ -20,6 +20,19 @@
 - Run status notifications to a Discord webhook
 - Docker image for self-hosted runs
 
+## Privacy (public repo)
+
+This repository is public, so **no personal data is stored in it**:
+
+- TikTok cookies: only in the `COOKIES_JSON` secret (never committed; `cookies.json` is gitignored).
+- Friend whitelist: stored encrypted in `whitelist.enc` (AES-256-GCM). The key lives in the
+  `WHITELIST_KEY` secret only. The Discord bot (`bot/`) reads and writes the same encrypted file.
+- Actions logs on a public repo are visible to everyone, so the workflow runs with `HIDE_NAMES=1`
+  and prints `user #N` instead of chat names. Discord alerts (private webhook) still show real names.
+
+Regenerate the whitelist file after changing names: run `bot/` with `WHITELIST_KEY` set and use
+`/whitelist add|remove`, or write `whitelist.enc` with the same format (`base64(iv|tag|ciphertext)`).
+
 ## Repository Structure
 
 | Path | Description |

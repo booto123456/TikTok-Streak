@@ -5,18 +5,26 @@ const {
   REST,
   Routes,
 } = require("discord.js");
+const crypto = require("crypto");
 
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID; // Application ID ของบอท (ใช้ลงทะเบียน slash command)
 const OWNER_ID = process.env.OWNER_ID; // Discord User ID ของเจ้าของ (มีสิทธิ์ใช้คำสั่ง)
 const GITHUB_TOKEN = process.env.GITHUB_TOKEN; // GitHub PAT (scope: repo)
 const GITHUB_REPO = process.env.GITHUB_REPO; // เช่น "booto123456/TikTok-Streak"
-const FILE_PATH = "whitelist.json";
+const WHITELIST_KEY = process.env.WHITELIST_KEY; // กุญแจเดียวกับ GitHub Secret WHITELIST_KEY (hex 64 ตัว)
+const FILE_PATH = "whitelist.enc";
 
-if (!DISCORD_BOT_TOKEN || !CLIENT_ID || !OWNER_ID || !GITHUB_TOKEN || !GITHUB_REPO) {
-  console.error("Missing env vars. ต้องตั้ง: DISCORD_BOT_TOKEN, CLIENT_ID, OWNER_ID, GITHUB_TOKEN, GITHUB_REPO");
+if (!DISCORD_BOT_TOKEN || !CLIENT_ID || !OWNER_ID || !GITHUB_TOKEN || !GITHUB_REPO || !WHITELIST_KEY) {
+  console.error(
+    "Missing env vars. ต้องตั้ง: DISCORD_BOT_TOKEN, CLIENT_ID, OWNER_ID, GITHUB_TOKEN, GITHUB_REPO, WHITELIST_KEY"
+  );
   process.exit(1);
 }
+
+// ---------- เข้ารหัส whitelist ----------
+// ใช้รูปแบบเดียวกับ index.js (AES-256-GCM) — ชื่อเพื่อนไม่ถูกเก็บเป็นข้อความใน repo
+const { encrypt, decrypt } = require("../whitelist");
 
 // ---------- GitHub API ----------
 async function readWhitelist() {
@@ -28,10 +36,11 @@ async function readWhitelist() {
       "User-Agent": "whitelist-bot",
     },
   });
+  if (res.status === 404) return { list: [], sha: undefined };
   if (!res.ok) throw new Error(`อ่าน GitHub ไม่สำเร็จ: HTTP ${res.status}`);
   const data = await res.json();
-  const list = JSON.parse(Buffer.from(data.content, "base64").toString("utf8"));
-  return { list, sha: data.sha };
+  const encrypted = Buffer.from(data.content, "base64").toString("utf8");
+  return { list: decrypt(encrypted, WHITELIST_KEY), sha: data.sha };
 }
 
 async function writeWhitelist(list, sha) {
@@ -42,11 +51,12 @@ async function writeWhitelist(list, sha) {
       Authorization: `Bearer ${GITHUB_TOKEN}`,
       Accept: "application/vnd.github+json",
       "User-Agent": "whitelist-bot",
+      "Content-Type": "application/json",
     },
     body: JSON.stringify({
       message: "bot: update whitelist",
-      content: Buffer.from(JSON.stringify(list, null, 2)).toString("base64"),
-      sha,
+      content: encrypt(list, WHITELIST_KEY),
+      ...(sha ? { sha } : {}),
     }),
   });
   if (!res.ok) throw new Error(`เขียน GitHub ไม่สำเร็จ: HTTP ${res.status}`);
