@@ -101,7 +101,13 @@ const main = async () => {
 
 
     let success = 0,
-    failed = 0;
+    failed = 0,
+    skipped = 0;
+    const whitelist = (CONFIG.whitelist || [])
+      .map((s) => String(s).trim().toLowerCase())
+      .filter(Boolean);
+    const skipGroups = !!CONFIG.skipGroups;
+    const groupMarkers = CONFIG.groupNameMarkers || [","];
     const iframe = await page.$("iframe[src*='/messages?allow_label=true&lang=en&scene=business']");
     if (!iframe) return;
     const frame = await iframe.contentFrame();
@@ -125,12 +131,30 @@ const main = async () => {
       try {
         const userSelector = `div[data-index="${i}"] [data-e2e="dm-new-conversation-item"]`;
         await frame.waitForSelector(userSelector, { timeout: 3000 });
-        await frame.click(userSelector);
+
         const nicknameSelector = `div[data-index="${i}"] [data-e2e="dm-new-conversation-nickname"]`;
         const username = await frame.evaluate((sel) => {
-          return document.querySelector(sel)?.textContent || `user${i}`;
+          return document.querySelector(sel)?.textContent?.trim() || "";
         }, nicknameSelector);
-        console.log(yellow(`\n[${i + 1}/${CONFIG.totalUsers}] Mengirim pesan ke: ${username}`));
+        const displayName = username || `user${i}`;
+        const lower = username.toLowerCase();
+
+        // --- เงื่อนไข whitelist: ถ้ามีรายชื่อ จะส่งเฉพาะคนที่ชื่อตรง ---
+        if (whitelist.length > 0 && !whitelist.some((w) => lower.includes(w))) {
+          if (isDebug) console.log(yellow(`  [${i + 1}/${CONFIG.totalUsers}] SKIP (ไม่อยู่ใน whitelist): ${displayName}`));
+          skipped++;
+          continue;
+        }
+
+        // --- เงื่อนไขข้ามกลุ่ม: ชื่อมีตัวคั่นแบบชื่อสมาชิกหลายคน ---
+        if (skipGroups && groupMarkers.some((m) => username.includes(m))) {
+          if (isDebug) console.log(yellow(`  [${i + 1}/${CONFIG.totalUsers}] SKIP (เป็นกลุ่ม): ${displayName}`));
+          skipped++;
+          continue;
+        }
+
+        await frame.click(userSelector);
+        console.log(yellow(`\n[${i + 1}/${CONFIG.totalUsers}] Mengirim pesan ke: ${displayName}`));
         await new Promise((r) => setTimeout(r, 500));
         if (isDebug) console.log(yellow("  [~] Mencari editor..."));
         await frame.waitForSelector("div.notranslate.public-DraftEditor-content", { timeout: 3000 });
@@ -171,7 +195,8 @@ const main = async () => {
 
     console.log(green(`\n[+] SELESAI!`));
     console.log(blue(`[+] Success: ${success}`));
-    console.log(red(`[+] Failed: ${failed}\n`));
+    console.log(red(`[+] Failed: ${failed}`));
+    console.log(yellow(`[+] Skipped: ${skipped}\n`));
     await new Promise((r) => setTimeout(r, CONFIG.finishDelayMs));
   } catch (e) {
     if (isDebug) console.error(red("[!] Fatal error:", e.message));
