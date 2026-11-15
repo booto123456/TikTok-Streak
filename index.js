@@ -121,7 +121,17 @@ const main = async () => {
     let success = 0,
     failed = 0,
     skipped = 0;
-    const whitelist = (CONFIG.whitelist || [])
+    const WHITELIST_FILE = path.join(__dirname, "whitelist.json");
+    let whitelistRaw = CONFIG.whitelist || [];
+    if (fs.existsSync(WHITELIST_FILE)) {
+      try {
+        whitelistRaw = JSON.parse(fs.readFileSync(WHITELIST_FILE, "utf8"));
+        if (isDebug) console.log(green("[+] โหลด whitelist จาก whitelist.json"));
+      } catch {
+        console.log(red("[!] whitelist.json อ่านไม่ได้ ใช้ค่าใน config.json แทน"));
+      }
+    }
+    const whitelist = (whitelistRaw || [])
       .map((s) => String(s).trim().toLowerCase())
       .filter(Boolean);
     const matchedWhitelist = new Set();
