@@ -10,7 +10,8 @@ const { bold, red, yellow, blue, magenta, cyan, green } = require("kleur/colors"
 
 
 const args = process.argv.slice(2);
-const isDebug = args.includes("--debug");
+const isDebug =
+  args.includes("--debug") || /^(1|true|yes)$/i.test(String(process.env.DEBUG || ""));
 // log ของ public repo มองเห็นได้ทุกคน — HIDE_NAMES=1 จะพิมพ์แค่ลำดับ ไม่พิมพ์ชื่อเพื่อน
 const HIDE_NAMES = /^(1|true|yes)$/i.test(String(process.env.HIDE_NAMES || ""));
 const CREDENTIALS_FILE = path.join(__dirname, "cookies.json");
@@ -77,6 +78,42 @@ const sendDiscordAlert = async (url, missing) => {
 
 
 
+// ---------- diagnostics ----------
+// ถ้าหา iframe ไม่เจอ ให้บอกสาเหตุ + ถ่ายภาพหน้าจอไว้ดู (ไม่พิมพ์ชื่อเพื่อน)
+const diagnose = async (page, reason) => {
+  console.log(red(`[!] ${reason}`));
+  let url = "-";
+  let title = "-";
+  let iframes = [];
+  try {
+    url = page.url();
+  } catch {}
+  try {
+    title = await page.title();
+  } catch {}
+  try {
+    iframes = await page.evaluate(() =>
+      Array.from(document.querySelectorAll("iframe")).map((f) => f.src || "(no src)")
+    );
+  } catch {}
+  console.log(red(`[!] URL: ${url}`));
+  console.log(red(`[!] Title: ${title}`));
+  console.log(red(`[!] iframe ที่พบ (${iframes.length}): ${iframes.join(" | ") || "-"}`));
+  try {
+    const shot = path.join(__dirname, "debug-screenshot.png");
+    await page.screenshot({ path: shot, fullPage: false });
+    console.log(red(`[!] บันทึกภาพหน้าจอ: ${shot}`));
+  } catch (e) {
+    console.log(red(`[!] จับภาพหน้าจอไม่ได้: ${e.message}`));
+  }
+};
+
+const IFRAME_SELECTORS = [
+  "iframe[src*='/messages?allow_label=true&lang=en&scene=business']",
+  "iframe[src*='/messages']",
+  "iframe[src*='scene=business']",
+];
+
 const main = async () => {
   const banner = figlet.textSync("TikTok Streak", { font: CONFIG.bannerFont, horizontalLayout: "default", verticalLayout: "default" });
   console.clear();
@@ -136,10 +173,33 @@ const main = async () => {
     const matchedWhitelist = new Set();
     const skipGroups = !!CONFIG.skipGroups;
     const groupMarkers = CONFIG.groupNameMarkers || [","];
-    const iframe = await page.$("iframe[src*='/messages?allow_label=true&lang=en&scene=business']");
-    if (!iframe) return;
+    let iframe = null;
+    for (const sel of IFRAME_SELECTORS) {
+      iframe = await page.$(sel);
+      if (iframe) {
+        if (isDebug) console.log(green(`[+] พบ iframe ด้วย selector: ${sel}`));
+        break;
+      }
+    }
+    if (!iframe) {
+      // เผื่อหน้าโหลดช้า — รอ iframe โผล่ก่อนแล้วลองใหม่
+      try {
+        await page.waitForSelector("iframe", { timeout: 15000 });
+      } catch {}
+      for (const sel of IFRAME_SELECTORS) {
+        iframe = await page.$(sel);
+        if (iframe) break;
+      }
+    }
+    if (!iframe) {
+      await diagnose(page, "ไม่พบ iframe ของหน้า messages (selector ไม่ตรง หรือ session หมดอายุ/ยังไม่ล็อกอิน)");
+      throw new Error("Messages iframe not found");
+    }
     const frame = await iframe.contentFrame();
-    if (!frame) return;
+    if (!frame) {
+      await diagnose(page, "พบ iframe แต่เข้าถึง contentFrame ไม่ได้");
+      throw new Error("Cannot access messages iframe content");
+    }
     try {
       await frame.waitForSelector("._TUXModal-wrapper", { visible: true, timeout: 3000});
       await frame.evaluate(() => {
@@ -252,7 +312,7 @@ const main = async () => {
     console.log("");
     await new Promise((r) => setTimeout(r, CONFIG.finishDelayMs));
   } catch (e) {
-    if (isDebug) console.error(red("[!] Fatal error:", e.message));
+    console.error(red("[!] Fatal error:", e.message));
     process.exit(1);
   } finally {
     if (browser) await browser.close();

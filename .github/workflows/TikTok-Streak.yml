@@ -25,9 +25,18 @@ jobs:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           WHITELIST_KEY: ${{ secrets.WHITELIST_KEY }}
           HEADLESS: "true"
-          # public repo: log เปิดให้ทุกคนอ่าน — ห้ามพิมพ์ชื่อเพื่อนลง log
+          DEBUG: "1"
+          # repo นี้เป็น private แล้ว แต่ยังซ่อนชื่อไว้กันพลาด
           HIDE_NAMES: "1"
         run: node index.js
+
+      - name: Upload debug screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshot
+          path: debug-screenshot.png
+          if-no-files-found: ignore
 
       - name: Discord Notification
         if: always()
