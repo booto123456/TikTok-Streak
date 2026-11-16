@@ -357,6 +357,12 @@ const main = async () => {
         }
         await page.keyboard.type(message, { delay: CONFIG.typeDelayMs });
         await new Promise((r) => setTimeout(r, CONFIG.afterSendDelayMs));
+        // กันเคสพิมพ์ไม่ออก (เช่น emoji อย่างเดียว) แล้วกด Enter ส่งข้อความว่าง
+        const typedText = await ctx.evaluate(
+          () => document.querySelector("div.notranslate.public-DraftEditor-content")?.textContent || ""
+        );
+        if (!typedText.trim()) throw new Error("พิมพ์ข้อความลงช่องไม่สำเร็จ (ช่องว่าง)");
+        if (isDebug) console.log(cyan(`  [~] ข้อความในช่อง: ${JSON.stringify(typedText.trim())}`));
         if (isDebug) console.log(blue("  [~] Mengirim dengan Ctrl+Enter..."));
         await page.keyboard.down("Control");
         await page.keyboard.press("Enter");
