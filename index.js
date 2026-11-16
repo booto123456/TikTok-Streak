@@ -14,6 +14,8 @@ const isDebug =
   args.includes("--debug") || /^(1|true|yes)$/i.test(String(process.env.DEBUG || ""));
 // log ของ public repo มองเห็นได้ทุกคน — HIDE_NAMES=1 จะพิมพ์แค่ลำดับ ไม่พิมพ์ชื่อเพื่อน
 const HIDE_NAMES = /^(1|true|yes)$/i.test(String(process.env.HIDE_NAMES || ""));
+// DRY_RUN=1 → ไม่ส่งจริง แค่บอกว่าจะส่งให้ใคร (ใช้ทดสอบ)
+const DRY_RUN = /^(1|true|yes)$/i.test(String(process.env.DRY_RUN || ""));
 const CREDENTIALS_FILE = path.join(__dirname, "cookies.json");
 const CONFIG_FILE = path.join(__dirname, "config.json");
 const loadConfig = () => {
@@ -239,7 +241,8 @@ const main = async () => {
 
     let success = 0,
     failed = 0,
-    skipped = 0;
+    skipped = 0,
+    wouldSend = 0;
     // ถ้าถอดรหัสไม่ได้ (กุญแจผิด/ไฟล์เสีย) จะ throw แล้วหยุดทันที ไม่ยอมส่งหาทุกคน
     const whitelistRaw = whitelistStore.load({ debug: isDebug });
     const whitelist = (whitelistRaw || [])
@@ -248,36 +251,34 @@ const main = async () => {
     const matchedWhitelist = new Set();
     const skipGroups = !!CONFIG.skipGroups;
     const groupMarkers = CONFIG.groupNameMarkers || [","];
+    // TikTok มี 2 โครงสร้าง: บางเวอร์ชันฝังรายการแชทใน iframe, เวอร์ชันใหม่ (2026) อยู่บนหน้าหลัก
+    let ctx = page;
     let iframe = null;
     for (const sel of IFRAME_SELECTORS) {
       iframe = await page.$(sel);
-      if (iframe) {
-        if (isDebug) console.log(green(`[+] พบ iframe ด้วย selector: ${sel}`));
-        break;
+      if (iframe) break;
+    }
+    if (iframe) {
+      const frame = await iframe.contentFrame();
+      if (frame) {
+        ctx = frame;
+        if (isDebug) console.log(green("[+] ใช้ iframe ของหน้า messages"));
       }
+    } else if (isDebug) {
+      console.log(green("[+] ใช้หน้าหลัก (ไม่พบ iframe) — โครงสร้างใหม่ของ TikTok"));
     }
-    if (!iframe) {
-      // เผื่อหน้าโหลดช้า — รอ iframe โผล่ก่อนแล้วลองใหม่
-      try {
-        await page.waitForSelector("iframe", { timeout: 15000 });
-      } catch {}
-      for (const sel of IFRAME_SELECTORS) {
-        iframe = await page.$(sel);
-        if (iframe) break;
-      }
-    }
-    if (!iframe) {
-      await diagnose(page, "ไม่พบ iframe ของหน้า messages (selector ไม่ตรง หรือ session หมดอายุ/ยังไม่ล็อกอิน)");
-      throw new Error("Messages iframe not found");
-    }
-    const frame = await iframe.contentFrame();
-    if (!frame) {
-      await diagnose(page, "พบ iframe แต่เข้าถึง contentFrame ไม่ได้");
-      throw new Error("Cannot access messages iframe content");
+
+    // รอให้รายการแชทขึ้นก่อน (หน้านี้ใช้เวลาเรนเดอร์)
+    try {
+      await ctx.waitForSelector('[data-e2e="dm-new-conversation-item"]', { timeout: 25000 });
+      if (isDebug) console.log(green("[+] พบรายการแชทแล้ว"));
+    } catch {
+      await diagnose(page, "ไม่พบรายการแชท (dm-new-conversation-item)");
+      throw new Error("Conversation list not found");
     }
     try {
-      await frame.waitForSelector("._TUXModal-wrapper", { visible: true, timeout: 3000});
-      await frame.evaluate(() => {
+      await ctx.waitForSelector("._TUXModal-wrapper", { visible: true, timeout: 3000});
+      await ctx.evaluate(() => {
         const modal = document.querySelector("._TUXModal-wrapper");
         if (!modal) return;
         const rect = modal.getBoundingClientRect();
@@ -290,24 +291,34 @@ const main = async () => {
 
 
 
-    for (let i = 0; i < CONFIG.totalUsers; i++) {
+    const itemCount = await ctx.evaluate(
+      () => document.querySelectorAll('[data-e2e="dm-new-conversation-item"]').length
+    );
+    // totalUsers = 0 (หรือไม่ตั้ง) หมายถึงตรวจทั้งหมดที่มองเห็น
+    const loopCount = CONFIG.totalUsers > 0 ? Math.min(CONFIG.totalUsers, itemCount) : itemCount;
+    if (isDebug) console.log(green(`[+] พบ ${itemCount} บทสนทนา — จะตรวจ ${loopCount} รายการ`));
+
+    for (let i = 0; i < loopCount; i++) {
       try {
         const userSelector = `div[data-index="${i}"] [data-e2e="dm-new-conversation-item"]`;
-        await frame.waitForSelector(userSelector, { timeout: 3000 });
+        await ctx.waitForSelector(userSelector, { timeout: 8000 });
 
         const nicknameSelector = `div[data-index="${i}"] [data-e2e="dm-new-conversation-nickname"]`;
-        const username = await frame.evaluate((sel) => {
+        const username = await ctx.evaluate((sel) => {
           return document.querySelector(sel)?.textContent?.trim() || "";
         }, nicknameSelector);
         const displayName = username || `user${i}`;
         const label = HIDE_NAMES ? `user #${i + 1}` : displayName;
         const lower = username.toLowerCase();
 
-        // --- เงื่อนไข whitelist: ถ้ามีรายชื่อ จะส่งเฉพาะคนที่ชื่อตรง ---
+        // --- เงื่อนไข whitelist ---
+        // ชื่อสั้น (1-2 ตัว) ต้องตรงทั้งชื่อเท่านั้น กัน "G" ไป match "kaning"
         if (whitelist.length > 0) {
-          const matched = whitelist.find((w) => lower.includes(w));
+          const matched = whitelist.find((w) =>
+            lower === w || (w.length >= 3 && lower.includes(w))
+          );
           if (!matched) {
-            if (isDebug) console.log(yellow(`  [${i + 1}/${CONFIG.totalUsers}] SKIP (ไม่อยู่ใน whitelist): ${label}`));
+            if (isDebug) console.log(yellow(`  [${i + 1}/${loopCount}] SKIP (ไม่อยู่ใน whitelist): ${label}`));
             skipped++;
             continue;
           }
@@ -316,17 +327,24 @@ const main = async () => {
 
         // --- เงื่อนไขข้ามกลุ่ม: ชื่อมีตัวคั่นแบบชื่อสมาชิกหลายคน ---
         if (skipGroups && groupMarkers.some((m) => username.includes(m))) {
-          if (isDebug) console.log(yellow(`  [${i + 1}/${CONFIG.totalUsers}] SKIP (เป็นกลุ่ม): ${label}`));
+          if (isDebug) console.log(yellow(`  [${i + 1}/${loopCount}] SKIP (เป็นกลุ่ม): ${label}`));
           skipped++;
           continue;
         }
 
-        await frame.click(userSelector);
-        console.log(yellow(`\n[${i + 1}/${CONFIG.totalUsers}] Mengirim pesan ke: ${label}`));
+        // --- โหมดทดสอบ: ไม่ส่งจริง แค่บอกว่าจะส่งให้ใคร ---
+        if (DRY_RUN) {
+          console.log(cyan(`  [DRY RUN] จะส่งให้: ${label}`));
+          wouldSend++;
+          continue;
+        }
+
+        await ctx.click(userSelector);
+        console.log(yellow(`\n[${i + 1}/${loopCount}] Mengirim pesan ke: ${label}`));
         await new Promise((r) => setTimeout(r, 500));
         if (isDebug) console.log(yellow("  [~] Mencari editor..."));
-        await frame.waitForSelector("div.notranslate.public-DraftEditor-content", { timeout: 3000 });
-        const editor = await frame.$("div.notranslate.public-DraftEditor-content");
+        await ctx.waitForSelector("div.notranslate.public-DraftEditor-content", { timeout: 10000 });
+        const editor = await ctx.$("div.notranslate.public-DraftEditor-content");
         if (!editor) throw new Error("Editor not found");
         await editor.click();
         await new Promise((r) => setTimeout(r, CONFIG.afterClickDelayMs));
@@ -353,7 +371,7 @@ const main = async () => {
 
 
 
-      if (i < CONFIG.totalUsers - 1) {
+      if (i < loopCount - 1) {
         if (isDebug) console.log(yellow(`  [~] Tunggu ${CONFIG.actionDelayMs} ms...`));
         await new Promise((r) => setTimeout(r, CONFIG.actionDelayMs));
       }
@@ -365,6 +383,7 @@ const main = async () => {
     console.log(blue(`[+] Success: ${success}`));
     console.log(red(`[+] Failed: ${failed}`));
     console.log(yellow(`[+] Skipped: ${skipped}`));
+    if (DRY_RUN) console.log(cyan(`[+] DRY RUN — จะส่งให้ ${wouldSend} คน (ยังไม่ได้ส่งจริง)`));
 
     // --- แจ้งเตือนถ้ามีชื่อใน whitelist ที่ไม่ถูกพบ ---
     if (whitelist.length > 0) {

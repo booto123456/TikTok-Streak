@@ -1,17 +1,17 @@
 {
   "message": "API",
   "useQuotesAPi": true,
-  "totalUsers": 14,
+  "totalUsers": 0,
   "whitelist": [],
   "skipGroups": true,
   "groupNameMarkers": [",", "+", " and ", " และ "],
   "actionDelayMs": 300,
-  "typeDelayMs": 0,
+  "typeDelayMs": 15,
   "afterSendDelayMs": 500,
   "afterClickDelayMs": 300,
   "pageLoadDelayMs": 5000,
   "finishDelayMs": 3000,
   "headless": false,
   "bannerFont": "DOS Rebel",
-  "targetUrl": "https://www.tiktok.com/business-suite/messages?lang=en&from=homepage"
+  "targetUrl": "https://www.tiktok.com/messages?lang=en"
 }
