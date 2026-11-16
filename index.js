@@ -38,9 +38,18 @@ if (process.env.HEADLESS !== undefined) CONFIG.headless = process.env.HEADLESS =
 if (process.env.TOTAL_USERS !== undefined) CONFIG.totalUsers = Number(process.env.TOTAL_USERS);
 if (process.env.MESSAGE !== undefined) CONFIG.message = process.env.MESSAGE;
 const BROWSER_CONFIG = {
-  args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  args: [
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
+    "--disable-blink-features=AutomationControlled",
+    "--lang=en-US",
+  ],
   headless: CONFIG.headless,
 };
+// TikTok ปฏิเสธ session ที่มาจาก Chrome แบบ headless ล้วนๆ — ปลอม UA ให้เหมือน Chrome จริง
+const USER_AGENT =
+  process.env.USER_AGENT ||
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 if (process.env.PUPPETEER_EXECUTABLE_PATH) {
   BROWSER_CONFIG.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
 }
@@ -179,9 +188,19 @@ const main = async () => {
     browser = await puppeteer.launch(BROWSER_CONFIG);
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
+    await page.setUserAgent(USER_AGENT);
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, "webdriver", { get: () => undefined });
+      Object.defineProperty(navigator, "languages", { get: () => ["en-US", "en"] });
+    });
+    const rawCookies = Array.isArray(credentials.cookies) ? credentials.cookies : [];
     const cookieList = normalizeCookies(credentials.cookies);
     if (cookieList.length === 0)
       throw new Error("ไม่พบ cookie ของ tiktok.com ใน COOKIES_JSON (ตรวจรูปแบบไฟล์อีกครั้ง)");
+    if (isDebug) {
+      console.log(yellow(`[+] cookies ที่ส่งมา ${rawCookies.length} รายการ, ใช้จริง ${cookieList.length}`));
+      console.log(yellow(`[+] ชื่อ cookies: ${cookieList.map((c) => c.name).join(", ")}`));
+    }
     await page.setCookie(...cookieList);
     if (isDebug) console.log(yellow(`[+] ใส่ cookies ${cookieList.length} รายการ`));
     if (isDebug) console.log(yellow("[+] Membuka halaman TikTok messages..."));
