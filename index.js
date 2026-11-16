@@ -203,6 +203,29 @@ const main = async () => {
     }
     await page.setCookie(...cookieList);
     if (isDebug) console.log(yellow(`[+] ใส่ cookies ${cookieList.length} รายการ`));
+
+    // --- pre-flight: ถาม TikTok ตรงๆ ว่า session นี้ยังใช้ได้จาก IP ของ runner ไหม ---
+    if (isDebug) {
+      const cookieHeader = cookieList.map((c) => `${c.name}=${c.value}`).join("; ");
+      for (const aid of [1459, 1988]) {
+        try {
+          const res = await fetch(
+            `https://www.tiktok.com/passport/web/account/info/?aid=${aid}&app_name=tiktok_web&device_platform=web`,
+            {
+              headers: {
+                Cookie: cookieHeader,
+                "User-Agent": USER_AGENT,
+                Referer: "https://www.tiktok.com/",
+              },
+            }
+          );
+          const body = (await res.text()).replace(/\s+/g, " ").slice(0, 240);
+          console.log(yellow(`[diag] account/info aid=${aid} → HTTP ${res.status}: ${body}`));
+        } catch (e) {
+          console.log(red(`[diag] account/info aid=${aid} ล้มเหลว: ${e.message}`));
+        }
+      }
+    }
     if (isDebug) console.log(yellow("[+] Membuka halaman TikTok messages..."));
     await page.goto(CONFIG.targetUrl, { waitUntil: "networkidle2", timeout: 60000 });
     if (/\/login/i.test(page.url())) {
