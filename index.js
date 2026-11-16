@@ -78,6 +78,31 @@ const sendDiscordAlert = async (url, missing) => {
 
 
 
+// ---------- cookies ----------
+// รองรับทุกรูปแบบที่ extension ส่งออกมา (EditThisCookie / Cookie-Editor / puppeteer)
+// แล้วแปลงเป็นรูปแบบที่ puppeteer รับได้
+const normalizeCookies = (cookies) =>
+  (Array.isArray(cookies) ? cookies : [])
+    .filter((c) => c && typeof c.name === "string" && typeof c.value === "string")
+    .map((c) => {
+      const out = {
+        name: c.name,
+        value: c.value,
+        domain: c.domain || ".tiktok.com",
+        path: c.path || "/",
+      };
+      const exp = c.expires ?? c.expirationDate;
+      if (typeof exp === "number" && exp > 0) out.expires = Math.floor(exp);
+      if (typeof c.httpOnly === "boolean") out.httpOnly = c.httpOnly;
+      if (typeof c.secure === "boolean") out.secure = c.secure;
+      const ss = String(c.sameSite || "").toLowerCase();
+      if (ss === "strict") out.sameSite = "Strict";
+      else if (ss === "lax") out.sameSite = "Lax";
+      else if (ss === "none" || ss === "no_restriction") out.sameSite = "None";
+      return out;
+    })
+    .filter((c) => /(^|\.)tiktok\.com$/i.test(c.domain));
+
 // ---------- diagnostics ----------
 // ถ้าหา iframe ไม่เจอ ให้บอกสาเหตุ + ถ่ายภาพหน้าจอไว้ดู (ไม่พิมพ์ชื่อเพื่อน)
 const diagnose = async (page, reason) => {
@@ -154,9 +179,17 @@ const main = async () => {
     browser = await puppeteer.launch(BROWSER_CONFIG);
     const page = await browser.newPage();
     await page.setViewport({ width: 1280, height: 800 });
-    await page.setCookie(...credentials.cookies);
+    const cookieList = normalizeCookies(credentials.cookies);
+    if (cookieList.length === 0)
+      throw new Error("ไม่พบ cookie ของ tiktok.com ใน COOKIES_JSON (ตรวจรูปแบบไฟล์อีกครั้ง)");
+    await page.setCookie(...cookieList);
+    if (isDebug) console.log(yellow(`[+] ใส่ cookies ${cookieList.length} รายการ`));
     if (isDebug) console.log(yellow("[+] Membuka halaman TikTok messages..."));
     await page.goto(CONFIG.targetUrl, { waitUntil: "networkidle2", timeout: 60000 });
+    if (/\/login/i.test(page.url())) {
+      await diagnose(page, "TikTok เด้งไปหน้า login — cookies หมดอายุหรือไม่ถูกต้อง ต้อง export ใหม่");
+      throw new Error("TikTok session expired (redirected to login)");
+    }
     if (isDebug) console.log(yellow("[+] Halaman loaded, tunggu UI siap..."));
     await new Promise((r) => setTimeout(r, CONFIG.pageLoadDelayMs));
 
